@@ -18,7 +18,6 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers: getCorsHeaders() });
 
     try {
-      // 1. 네이버 메인 로드 (최신 브라우저 환경 모방)
       const response = await fetch("https://www.naver.com/", {
         headers: { 
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36" 
@@ -26,58 +25,47 @@ export default {
       });
       const html = await response.text();
 
-      const finalEagerData = {};
+      const finalData = {};
 
-      // 🎯 [개선된 정규식] 
-      // window["EAGER-DATA"]["KEY"] = { ... } 형태를 공백/줄바꿈 무관하게 모두 찾음
-      const regex = /window\s*\[\s*["']EAGER-DATA["']\s*\]\s*\[\s*["'](.*?)["']\s*\]\s*=\s*({[\s\S]*?});/g;
+      // 🎯 [핵심] 사용자님 제안대로 할당 패턴을 공략하는 정규식
+      // 1. window["EAGER-DATA"]["KEY"] 형식을 찾음
+      // 2. 이후 처음 나오는 { 부터 마지막 ; 직전의 } 까지를 캡처
+      const regex = /window\s*\[\s*["']EAGER-DATA["']\s*\]\s*\[\s*["']([^"']+)["']\s*\]\s*=\s*([\s\S]*?);(?=\s*(?:window|<\/script>))/g;
       
       let match;
-      let matchCount = 0;
-
       while ((match = regex.exec(html)) !== null) {
         const key = match[1];
         let valueStr = match[2].trim();
         
         try {
-          // 가끔 네이버 데이터 끝에 세미콜론이나 불필요한 공백이 포함될 수 있어 정리 후 파싱
-          finalEagerData[key] = JSON.parse(valueStr);
-          matchCount++;
+          // 추출된 값이 유효한 JSON인지 확인하고 객체에 추가
+          finalData[key] = JSON.parse(valueStr);
         } catch (e) {
-          // JSON 파싱 실패 시 (trailing comma 등) 브라우저가 해석하는 방식으로 정제 시도
+          // JSON 파싱 실패 시, 혹시 모를 끝부분의 불필요한 문자를 제거하고 재시도
           try {
-            // 매우 드문 경우지만, 정규식이 객체 끝을 잘못 잡았을 경우를 대비해 마지막 중괄호까지만 자름
-            const lastBraceIndex = valueStr.lastIndexOf('}');
-            if (lastBraceIndex !== -1) {
-              finalEagerData[key] = JSON.parse(valueStr.substring(0, lastBraceIndex + 1));
-              matchCount++;
-            }
-          } catch (innerError) {
-            console.error(`Failed to parse key: ${key}`);
+            const cleanValue = valueStr.substring(0, valueStr.lastIndexOf('}') + 1);
+            finalData[key] = JSON.parse(cleanValue);
+          } catch (err) {
+            console.error(`파싱 실패 키: ${key}`);
           }
         }
       }
 
-      // 2. 수집 결과 검증
-      if (matchCount === 0) {
+      // 수집된 데이터가 하나도 없을 경우 (정규식 미매칭 대비)
+      if (Object.keys(finalData).length === 0) {
         return new Response(JSON.stringify({ 
           error: "EAGER-DATA 수집 실패", 
-          debug: html.substring(html.indexOf('window["EAGER-DATA"]'), html.indexOf('window["EAGER-DATA"]') + 500) 
-        }), { 
-          status: 404, 
-          headers: getCorsHeaders() 
-        });
+          hint: "정규식이 데이터를 캡처하지 못했습니다. 네이버 소스 구조를 확인하세요.",
+          sample: html.substring(html.indexOf('window["EAGER-DATA"]'), html.indexOf('window["EAGER-DATA"]') + 400)
+        }), { status: 404, headers: getCorsHeaders() });
       }
 
-      // 3. 전체 병합된 객체 반환 (사용자님의 콘솔 화면과 동일한 구조)
-      return new Response(JSON.stringify(finalEagerData), {
-        headers: getCorsHeaders()
-      });
+      return new Response(JSON.stringify(finalData), { headers: getCorsHeaders() });
 
     } catch (e) {
-      return new Response(JSON.stringify({ error: e.message }), {
-        status: 500,
-        headers: getCorsHeaders()
+      return new Response(JSON.stringify({ error: "Worker Error: " + e.message }), { 
+        status: 500, 
+        headers: getCorsHeaders() 
       });
     }
   }
