@@ -25,42 +25,55 @@ export default {
       });
       const html = await response.text();
 
-      const finalData = {};
+      const finalEagerData = {};
 
-      // 🎯 [핵심] 사용자님 제안대로 할당 패턴을 공략하는 정규식
-      // 1. window["EAGER-DATA"]["KEY"] 형식을 찾음
-      // 2. 이후 처음 나오는 { 부터 마지막 ; 직전의 } 까지를 캡처
-      const regex = /window\s*\[\s*["']EAGER-DATA["']\s*\]\s*\[\s*["']([^"']+)["']\s*\]\s*=\s*([\s\S]*?);(?=\s*(?:window|<\/script>))/g;
-      
-      let match;
-      while ((match = regex.exec(html)) !== null) {
-        const key = match[1];
-        let valueStr = match[2].trim();
+      // 🎯 [패턴 추적 방식]
+      // 1. window["EAGER-DATA"][" 를 기준으로 전체 HTML을 분할합니다. (따옴표 종류 모두 대응)
+      const segments = html.split(/window\s*\[\s*["']EAGER-DATA["']\s*\]\s*\[\s*["']/);
+
+      // 첫 번째 세그먼트는 초기화 구문 이전의 내용이므로 제외하고 1번부터 순회합니다.
+      for (let i = 1; i < segments.length; i++) {
+        const segment = segments[i];
         
+        // 2. 키값 추출 (예: PC-FEED-WRAPPER)
+        const keyMatch = segment.match(/^([^"']+)/);
+        if (!keyMatch) continue;
+        const key = keyMatch[1];
+
+        // 3. 데이터 시작 지점(=)과 종료 지점(};) 사이의 내용을 추출합니다.
+        const assignmentIndex = segment.indexOf('=');
+        if (assignmentIndex === -1) continue;
+
+        // 실제 객체 시작 부분({)을 찾습니다.
+        const braceIndex = segment.indexOf('{', assignmentIndex);
+        if (braceIndex === -1) continue;
+
+        // 세미콜론(;)을 기준으로 객체의 끝을 찾습니다.
+        const semicolonIndex = segment.indexOf('};', braceIndex);
+        if (semicolonIndex === -1) continue;
+
+        const jsonString = segment.substring(braceIndex, semicolonIndex + 1).trim();
+
         try {
-          // 추출된 값이 유효한 JSON인지 확인하고 객체에 추가
-          finalData[key] = JSON.parse(valueStr);
+          // 4. 추출된 문자열을 JSON으로 파싱하여 최종 객체에 할당합니다.
+          finalEagerData[key] = JSON.parse(jsonString);
         } catch (e) {
-          // JSON 파싱 실패 시, 혹시 모를 끝부분의 불필요한 문자를 제거하고 재시도
-          try {
-            const cleanValue = valueStr.substring(0, valueStr.lastIndexOf('}') + 1);
-            finalData[key] = JSON.parse(cleanValue);
-          } catch (err) {
-            console.error(`파싱 실패 키: ${key}`);
-          }
+          // 파싱 실패 시 디버깅을 위해 기록하거나 건너뜁니다.
+          console.error(`Parsing failed for key: ${key}`);
         }
       }
 
-      // 수집된 데이터가 하나도 없을 경우 (정규식 미매칭 대비)
-      if (Object.keys(finalData).length === 0) {
+      // 최종 수집된 데이터 검증
+      if (Object.keys(finalEagerData).length === 0) {
         return new Response(JSON.stringify({ 
-          error: "EAGER-DATA 수집 실패", 
-          hint: "정규식이 데이터를 캡처하지 못했습니다. 네이버 소스 구조를 확인하세요.",
-          sample: html.substring(html.indexOf('window["EAGER-DATA"]'), html.indexOf('window["EAGER-DATA"]') + 400)
+          error: "데이터 추출 실패", 
+          debug: html.substring(html.indexOf('window["EAGER-DATA"]'), html.indexOf('window["EAGER-DATA"]') + 400) 
         }), { status: 404, headers: getCorsHeaders() });
       }
 
-      return new Response(JSON.stringify(finalData), { headers: getCorsHeaders() });
+      return new Response(JSON.stringify(finalEagerData), {
+        headers: getCorsHeaders()
+      });
 
     } catch (e) {
       return new Response(JSON.stringify({ error: "Worker Error: " + e.message }), { 
