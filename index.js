@@ -20,48 +20,41 @@ export default {
     try {
       const response = await fetch("https://www.naver.com/", {
         headers: { 
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" 
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" 
         }
       });
       const html = await response.text();
 
-      // 전체 데이터를 담을 객체
-      let finalEagerData = {};
+      // 전체 데이터를 담을 객체 생성
+      const finalData = {};
 
-      // 🎯 패턴 1: window["EAGER-DATA"] = { ... }; (통째로 할당하는 경우)
-      const rootMatch = html.match(/window\[["']EAGER-DATA["']\]\s*=\s*({[\s\S]*?});/);
-      if (rootMatch && rootMatch[1]) {
-        try {
-          finalEagerData = JSON.parse(rootMatch[1]);
-        } catch (e) {
-          // JSON 파싱 실패 시 일단 무시하고 다음 패턴 시도
-        }
-      }
-
-      // 🎯 패턴 2: window["EAGER-DATA"]["KEY"] = { ... }; (부분별로 할당하는 경우)
-      // 전역 검색(/g)을 통해 모든 키-값 쌍을 찾아냅니다.
-      const partRegex = /window\[["']EAGER-DATA["']\]\[["'](.*?)["']\]\s*=\s*({[\s\S]*?});/g;
+      // 🎯 사용자님이 주신 패턴에 딱 맞춘 정규표현식
+      // 패턴: window["EAGER-DATA"]["KEY"] = { ... };
+      const regex = /window\[["']EAGER-DATA["']\]\[["'](.*?)["']\]\s*=\s*({[\s\S]*?});/g;
+      
       let match;
-      while ((match = partRegex.exec(html)) !== null) {
-        const key = match[1];
-        const valueStr = match[2];
+      while ((match = regex.exec(html)) !== null) {
+        const key = match[1];      // 예: "PC-FEED-WRAPPER"
+        const valueStr = match[2]; // 할당된 JSON 문자열
+        
         try {
-          finalEagerData[key] = JSON.parse(valueStr);
+          // 추출된 문자열을 JSON 객체로 변환하여 병합
+          finalData[key] = JSON.parse(valueStr);
         } catch (e) {
-          // 개별 파싱 실패 시 텍스트 그대로 저장하거나 무시
+          // 만약 순수 JSON이 아니라면(예: trailing comma 등), 실패한 키는 건너뜁니다.
+          console.error(`Parsing failed for key: ${key}`);
         }
       }
 
-      // 데이터가 아무것도 없다면 에러 반환
-      if (Object.keys(finalEagerData).length === 0) {
+      // 수집된 데이터가 없다면 디버깅 정보 반환
+      if (Object.keys(finalData).length === 0) {
         return new Response(JSON.stringify({ 
-          error: "EAGER-DATA 수집 실패", 
-          debug: html.substring(0, 500) 
+          error: "데이터를 찾을 수 없습니다.",
+          htmlSample: html.substring(html.indexOf('window["EAGER-DATA"]'), html.indexOf('window["EAGER-DATA"]') + 300)
         }), { status: 404, headers: getCorsHeaders() });
       }
 
-      // 수집된 전체 객체 반환
-      return new Response(JSON.stringify(finalEagerData), {
+      return new Response(JSON.stringify(finalData), {
         headers: getCorsHeaders()
       });
 
