@@ -8,7 +8,6 @@ export default {
   async fetch(request, env) {
     const origin = request.headers.get("Origin");
     
-    // 공통 응답 헤더 생성 함수 (CORS 해결의 핵심)
     const getCorsHeaders = () => ({
       "Access-Control-Allow-Origin": originWhitelist.includes(origin) ? origin : (origin ? "null" : "*"),
       "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -16,31 +15,41 @@ export default {
       "Content-Type": "application/json;charset=UTF-8"
     });
 
-    // 1. OPTIONS 요청 처리
-    if (request.method === "OPTIONS") {
-      return new Response(null, { headers: getCorsHeaders() });
-    }
+    if (request.method === "OPTIONS") return new Response(null, { headers: getCorsHeaders() });
 
     try {
-      // 2. 네이버 호출
+      // 1. 네이버 메인 요청 (데스크톱 User-Agent 필수)
       const response = await fetch("https://www.naver.com/", {
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0" }
+        headers: { 
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" 
+        }
       });
       const html = await response.text();
 
-      // 3. 정규표현식 개선 (홀따옴표/쌍따옴표 모두 대응)
-      const dataRegex = /window\[["']EAGER-DATA["']\]\s*=\s*({.*?});/s;
-      const match = html.match(dataRegex);
+      // 2. 뉴스스탠드 핵심 데이터(PC-MEDIA-WRAPPER) 추출 정규식
+      // 네이버 소스: window["EAGER-DATA"]["PC-MEDIA-WRAPPER"] = { ... };
+      const newsstandRegex = /window\["EAGER-DATA"\]\["PC-MEDIA-WRAPPER"\]\s*=\s*({.*?});/s;
+      const match = html.match(newsstandRegex);
 
-      if (!match) {
-        return new Response(JSON.stringify({ error: "EAGER-DATA 파싱 실패", htmlPreview: html.substring(0, 200) }), {
-          status: 404,
-          headers: getCorsHeaders()
-        });
+      if (match && match[1]) {
+        return new Response(match[1], { headers: getCorsHeaders() });
       }
 
-      // 4. 성공 응답
-      return new Response(match[1], {
+      // 3. 만약 위 형식이 없다면, 통합 EAGER-DATA 할당 시도 검색
+      const eagerDataRegex = /window\["EAGER-DATA"\]\s*=\s*window\["EAGER-DATA"\]\s*\|\|\s*{};\s*window\["EAGER-DATA"\]\["PC-MEDIA-WRAPPER"\]\s*=\s*({.*?});/s;
+      const secondaryMatch = html.match(eagerDataRegex);
+
+      if (secondaryMatch && secondaryMatch[1]) {
+        return new Response(secondaryMatch[1], { headers: getCorsHeaders() });
+      }
+
+      // 4. 실패 시 디버깅을 위한 정보 반환
+      return new Response(JSON.stringify({ 
+        error: "데이터 추출 실패", 
+        suggestion: "네이버의 스크립트 구조가 변경되었을 수 있습니다.",
+        htmlSnippet: html.substring(html.indexOf('window["EAGER-DATA"]'), html.indexOf('window["EAGER-DATA"]') + 500)
+      }), {
+        status: 404,
         headers: getCorsHeaders()
       });
 
